@@ -112,22 +112,23 @@ export default function DriverVehicles() {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Vehicles</h1>
-          <p className="text-gray-500">Manage your registered vehicles</p>
+    <div className="flex flex-col h-screen">
+      <div className="p-6 max-w-2xl mx-auto w-full flex-shrink-0">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">My Vehicles</h1>
+            <p className="text-gray-500">Manage your registered vehicles</p>
+          </div>
+          {!showForm && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700"
+            >
+              <Plus className="h-4 w-4" />
+              Add Vehicle
+            </button>
+          )}
         </div>
-        {!showForm && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700"
-          >
-            <Plus className="h-4 w-4" />
-            Add Vehicle
-          </button>
-        )}
-      </div>
 
       {/* Add/Edit Form */}
       {showForm && (
@@ -216,14 +217,17 @@ export default function DriverVehicles() {
         </div>
       )}
 
-      {/* Vehicles List */}
-      {vehicles.length > 0 ? (
-        <div className="space-y-3">
-          {vehicles.map((vehicle) => (
-            <div
-              key={vehicle.vehicle_id}
-              className="bg-white rounded-xl border p-4 flex items-center gap-4"
-            >
+      </div>
+
+      {/* Vehicles List - Scrollable */}
+      <div className="flex-1 overflow-y-auto px-6 max-w-2xl mx-auto w-full pb-6">
+        {vehicles.length > 0 ? (
+          <div className="space-y-3">
+            {vehicles.map((vehicle) => (
+              <div
+                key={vehicle.vehicle_id}
+                className="bg-white rounded-xl border p-4 flex items-center gap-4"
+              >
               <div className="p-3 rounded-xl bg-gray-100">
                 <Car className="h-6 w-6 text-gray-500" />
               </div>
@@ -254,23 +258,24 @@ export default function DriverVehicles() {
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="bg-gray-50 rounded-2xl p-12 text-center">
-          <Car className="h-16 w-16 mx-auto text-gray-300 mb-4" />
-          <h3 className="text-lg font-medium text-gray-700">No vehicles registered</h3>
-          <p className="text-gray-500 mt-1">Add your first vehicle to start parking</p>
-          <button
-            onClick={() => setShowForm(true)}
-            className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700"
-          >
-            <Plus className="h-4 w-4" />
-            Add Vehicle
-          </button>
-        </div>
-      )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-gray-50 rounded-2xl p-12 text-center">
+            <Car className="h-16 w-16 mx-auto text-gray-300 mb-4" />
+            <h3 className="text-lg font-medium text-gray-700">No vehicles registered</h3>
+            <p className="text-gray-500 mt-1">Add your first vehicle to start parking</p>
+            <button
+              onClick={() => setShowForm(true)}
+              className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700"
+            >
+              <Plus className="h-4 w-4" />
+              Add Vehicle
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

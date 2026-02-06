@@ -1,16 +1,16 @@
 import {
-  Car,
-  ChevronRight,
-  Clock,
-  CreditCard,
-  Info,
-  Loader2,
-  LogIn,
-  MapPin,
-  Navigation2,
-  ParkingSquare,
-  Search,
-  X
+    Car,
+    ChevronRight,
+    Clock,
+    CreditCard,
+    Info,
+    Loader2,
+    LogIn,
+    MapPin,
+    Navigation2,
+    ParkingSquare,
+    Search,
+    X
 } from 'lucide-react'
 import maplibregl from 'maplibre-gl'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -700,9 +700,9 @@ export default function FindParking() {
   }
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="bg-white border-b px-4 py-3 flex items-center justify-between z-10">
+      <header className="flex-shrink-0 bg-white border-b px-4 py-3 flex items-center justify-between z-10">
         <div className="flex items-center gap-3">
           <Car className="h-8 w-8 text-primary-600" />
           <div>
@@ -731,11 +731,11 @@ export default function FindParking() {
         </div>
       </header>
 
-      <div className="flex-1 flex">
+      <div className="flex-1 flex overflow-hidden">
         {/* Sidebar - Search Controls & Results */}
-        <div className="w-80 bg-white border-r flex flex-col">
+        <div className="w-80 h-full bg-white border-r flex flex-col overflow-hidden">
           {/* Search Controls */}
-          <div className="p-4 border-b space-y-4">
+          <div className="flex-shrink-0 p-4 border-b space-y-4">
             <button
               onClick={searchAtMyLocation}
               disabled={loading}
@@ -787,10 +787,10 @@ export default function FindParking() {
           </div>
 
           {/* Results */}
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden">
             {searchPoint ? (
               <>
-                <div className="px-4 py-2 bg-gray-50 border-b">
+                <div className="px-4 py-2 bg-gray-50 border-b sticky top-0 z-10">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">
                       {nearbyZones.length} parking zone{nearbyZones.length !== 1 ? 's' : ''} found
@@ -872,8 +872,8 @@ export default function FindParking() {
         </div>
 
         {/* Map */}
-        <div className="flex-1 relative">
-          <div ref={mapContainer} className="absolute inset-0" />
+        <div className="flex-1 relative overflow-hidden">
+          <div ref={mapContainer} className="w-full h-full" />
 
           {/* Legend */}
           <div className="absolute bottom-4 left-4 bg-white rounded-lg shadow-lg p-3 z-10">
