@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* MapLibre overrides */
+.maplibregl-map {
+  font-family: inherit;
+}
+
+.maplibregl-canvas {
+  cursor: crosshair !important;
+}
+
+.maplibregl-canvas-container {
+  cursor: crosshair !important;
+}
+
+/* Ensure map canvas is always interactive */
+.maplibregl-canvas-container.maplibregl-interactive {
+  cursor: crosshair !important;
+}
+
+.maplibregl-popup-content {
+  padding: 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Bay markers should not block map interaction except for themselves */
+.bay-marker {
+  pointer-events: auto !important;
+  z-index: 1;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* Status colors */
+.status-available {
+  @apply text-green-600 bg-green-100;
+}
+
+.status-occupied {
+  @apply text-red-600 bg-red-100;
+}
+
+.status-reserved {
+  @apply text-amber-600 bg-amber-100;
+}
+
+.status-closed {
+  @apply text-gray-600 bg-gray-100;
+}

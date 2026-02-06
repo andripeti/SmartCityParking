@@ -1,0 +1,912 @@
+import clsx from 'clsx'
+import {
+    Accessibility,
+    Car,
+    ChevronRight,
+    Clock,
+    CreditCard,
+    Info,
+    Loader2,
+    LogIn,
+    MapPin,
+    Navigation2,
+    Search,
+    X,
+    Zap
+} from 'lucide-react'
+import maplibregl from 'maplibre-gl'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { baysApi, zonesApi } from '../lib/api'
+import { useAuthStore } from '../store/authStore'
+import type { Bay, Zone } from '../types'
+
+// OpenStreetMap raster tile style
+const OSM_STYLE = {
+  version: 8 as const,
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+  sources: {
+    osm: {
+      type: 'raster' as const,
+      tiles: [
+        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
+      ],
+      tileSize: 256,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+    }
+  },
+  layers: [
+    {
+      id: 'osm-tiles',
+      type: 'raster' as const,
+      source: 'osm',
+      minzoom: 0,
+      maxzoom: 19
+    }
+  ]
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  available: '#22c55e',
+  occupied: '#ef4444',
+  reserved: '#f59e0b',
+  closed: '#6b7280',
+}
+
+// Helper to get center coordinates from a geometry for marker placement
+function getGeometryCenter(geom: any): [number, number] | null {
+  if (!geom || !geom.coordinates) return null
+  
+  if (geom.type === 'Point') {
+    const coords = geom.coordinates
+    // Coordinates should be [lng, lat] numbers
+    if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+      return [coords[0], coords[1]]
+    }
+    return null
+  }
+  
+  if (geom.type === 'Polygon') {
+    // Get centroid of polygon by averaging vertices
+    const ring = geom.coordinates[0]
+    let sumLng = 0, sumLat = 0
+    
+    for (const coord of ring) {
+      if (Array.isArray(coord) && coord.length >= 2) {
+        sumLng += coord[0]
+        sumLat += coord[1]
+      }
+    }
+    
+    const count = ring.length
+    if (count > 0) {
+      return [sumLng / count, sumLat / count]
+    }
+  }
+  
+  return null
+}
+
+interface NearbyBay extends Bay {
+  distance_meters: number
+  zone_name: string
+}
+
+interface SearchResult {
+  items: NearbyBay[]
+  total: number
+  search_point: { lat: number; lng: number }
+}
+
+export default function FindParking() {
+  const navigate = useNavigate()
+  const { isAuthenticated, user } = useAuthStore()
+  const mapContainer = useRef<HTMLDivElement>(null)
+  const map = useRef<maplibregl.Map | null>(null)
+  const searchMarkerRef = useRef<maplibregl.Marker | null>(null)
+  
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
+  const [searchResults, setSearchResults] = useState<SearchResult | null>(null)
+  const [selectedBay, setSelectedBay] = useState<NearbyBay | null>(null)
+  const [zones, setZones] = useState<Zone[]>([])
+  const [loading, setLoading] = useState(false)
+  const [searchRadius, setSearchRadius] = useState(500)
+  const [showOnlyAvailable, setShowOnlyAvailable] = useState(true)
+  const [showEVOnly, setShowEVOnly] = useState(false)
+  const [showAccessibleOnly, setShowAccessibleOnly] = useState(false)
+
+  // Initialize map
+  useEffect(() => {
+    if (!mapContainer.current || map.current) return
+
+    map.current = new maplibregl.Map({
+      container: mapContainer.current,
+      style: OSM_STYLE,
+      center: [16.3738, 48.2082], // Vienna Stephansplatz
+      zoom: 14,
+    })
+
+    map.current.addControl(new maplibregl.NavigationControl(), 'top-right')
+    
+    const geolocate = new maplibregl.GeolocateControl({
+      positionOptions: { enableHighAccuracy: true },
+      trackUserLocation: true,
+      showUserHeading: true
+    })
+    map.current.addControl(geolocate, 'top-right')
+    
+    // Add attribution control (required for OSM)
+    map.current.addControl(
+      new maplibregl.AttributionControl({
+        compact: false,
+        customAttribution: 'Parking data © OpenStreetMap contributors'
+      }),
+      'bottom-right'
+    )
+
+    map.current.on('load', () => {
+      geolocate.trigger()
+      
+      // Add parking zones source (will be populated after zones load)
+      map.current!.addSource('parking-zones', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      })
+      
+      // Add zone fill layer (semi-transparent polygons)
+      map.current!.addLayer({
+        id: 'parking-zones-fill',
+        type: 'fill',
+        source: 'parking-zones',
+        paint: {
+          'fill-color': [
+            'match', ['get', 'zone_type'],
+            'lot', '#3b82f6',        // blue for parking lots
+            'garage', '#8b5cf6',      // purple for garages
+            'on_street', '#22c55e',   // green for street parking
+            'off_street', '#f59e0b',  // amber for off-street
+            '#6b7280'                  // gray default
+          ],
+          'fill-opacity': 0.25
+        }
+      })
+      
+      // Add zone outline layer
+      map.current!.addLayer({
+        id: 'parking-zones-outline',
+        type: 'line',
+        source: 'parking-zones',
+        paint: {
+          'line-color': [
+            'match', ['get', 'zone_type'],
+            'lot', '#2563eb',
+            'garage', '#7c3aed',
+            'on_street', '#16a34a',
+            'off_street', '#d97706',
+            '#4b5563'
+          ],
+          'line-width': 2,
+          'line-opacity': 0.8
+        }
+      })
+      
+      // Add zone labels at higher zoom
+      map.current!.addLayer({
+        id: 'parking-zones-labels',
+        type: 'symbol',
+        source: 'parking-zones',
+        minzoom: 15,
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-size': 12,
+          'text-anchor': 'center',
+          'text-max-width': 10
+        },
+        paint: {
+          'text-color': '#1f2937',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1.5
+        }
+      })
+      
+      // Add empty source for search results (will be populated on search)
+      map.current!.addSource('search-results', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      })
+      
+      // Add source for bay polygons (actual shapes, shown when zoomed in)
+      map.current!.addSource('bay-polygons', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      })
+      
+      // Add bay polygon fill layer (visible at high zoom)
+      map.current!.addLayer({
+        id: 'bay-polygons-fill',
+        type: 'fill',
+        source: 'bay-polygons',
+        minzoom: 16,
+        paint: {
+          'fill-color': [
+            'match', ['get', 'status'],
+            'available', STATUS_COLORS.available,
+            'occupied', STATUS_COLORS.occupied,
+            'reserved', STATUS_COLORS.reserved,
+            'closed', STATUS_COLORS.closed,
+            '#6b7280'
+          ],
+          'fill-opacity': 0.5
+        }
+      })
+      
+      // Add bay polygon outline layer
+      map.current!.addLayer({
+        id: 'bay-polygons-outline',
+        type: 'line',
+        source: 'bay-polygons',
+        minzoom: 16,
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 1.5,
+          'line-opacity': 0.9
+        }
+      })
+      
+      // Add circle layer for bays (GPU-accelerated, shown at lower zoom)
+      map.current!.addLayer({
+        id: 'search-results-circles',
+        type: 'circle',
+        source: 'search-results',
+        maxzoom: 18,
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            12, 4,
+            16, 10,
+            20, 16
+          ],
+          'circle-color': [
+            'match', ['get', 'status'],
+            'available', STATUS_COLORS.available,
+            'occupied', STATUS_COLORS.occupied,
+            'reserved', STATUS_COLORS.reserved,
+            'closed', STATUS_COLORS.closed,
+            '#6b7280'
+          ],
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
+          'circle-opacity': 0.9
+        }
+      })
+      
+      // Add labels for bay numbers at higher zoom levels
+      map.current!.addLayer({
+        id: 'search-results-labels',
+        type: 'symbol',
+        source: 'search-results',
+        minzoom: 17,
+        layout: {
+          'text-field': ['get', 'bay_number'],
+          'text-size': 10,
+          'text-anchor': 'center',
+          'text-allow-overlap': true
+        },
+        paint: {
+          'text-color': '#ffffff',
+          'text-halo-color': '#000000',
+          'text-halo-width': 0.5
+        }
+      })
+      
+      // Click handler for bays layer (circles)
+      map.current!.on('click', 'search-results-circles', (e) => {
+        if (e.features && e.features[0]) {
+          const props = e.features[0].properties
+          const bay: NearbyBay = {
+            bay_id: props.bay_id,
+            bay_number: props.bay_number,
+            zone_id: props.zone_id,
+            zone_name: props.zone_name,
+            status: props.status,
+            is_disabled_only: props.is_disabled_only,
+            is_electric: props.is_electric,
+            distance_meters: props.distance_meters,
+            geom: e.features[0].geometry
+          } as NearbyBay
+          setSelectedBay(bay)
+        }
+      })
+      
+      // Click handler for bay polygons (when zoomed in)
+      map.current!.on('click', 'bay-polygons-fill', (e) => {
+        if (e.features && e.features[0]) {
+          const props = e.features[0].properties
+          const bay: NearbyBay = {
+            bay_id: props.bay_id,
+            bay_number: props.bay_number,
+            zone_id: props.zone_id,
+            zone_name: props.zone_name,
+            status: props.status,
+            is_disabled_only: props.is_disabled_only,
+            is_electric: props.is_electric,
+            distance_meters: props.distance_meters,
+            geom: e.features[0].geometry
+          } as NearbyBay
+          setSelectedBay(bay)
+        }
+      })
+      
+      // Change cursor on hover for bays
+      map.current!.on('mouseenter', 'search-results-circles', () => {
+        if (map.current) map.current.getCanvas().style.cursor = 'pointer'
+      })
+      
+      map.current!.on('mouseleave', 'search-results-circles', () => {
+        if (map.current) map.current.getCanvas().style.cursor = ''
+      })
+      
+      map.current!.on('mouseenter', 'bay-polygons-fill', () => {
+        if (map.current) map.current.getCanvas().style.cursor = 'pointer'
+      })
+      
+      map.current!.on('mouseleave', 'bay-polygons-fill', () => {
+        if (map.current) map.current.getCanvas().style.cursor = ''
+      })
+      
+      // Change cursor on hover for zones
+      map.current!.on('mouseenter', 'parking-zones-fill', () => {
+        if (map.current) map.current.getCanvas().style.cursor = 'pointer'
+      })
+      
+      map.current!.on('mouseleave', 'parking-zones-fill', () => {
+        if (map.current) map.current.getCanvas().style.cursor = ''
+      })
+      
+      // Show zone popup on click
+      map.current!.on('click', 'parking-zones-fill', (e) => {
+        if (e.features && e.features[0]) {
+          const props = e.features[0].properties
+          new maplibregl.Popup({ closeButton: true, maxWidth: '250px' })
+            .setLngLat(e.lngLat)
+            .setHTML(`
+              <div class="p-2">
+                <h3 class="font-bold text-gray-900">${props.name || 'Unnamed Zone'}</h3>
+                <p class="text-sm text-gray-600 capitalize">${(props.zone_type || 'parking').replace('_', ' ')}</p>
+                <p class="text-xs text-gray-500 mt-1">Click anywhere in the zone to search for bays</p>
+              </div>
+            `)
+            .addTo(map.current!)
+        }
+      })
+    })
+
+    // Click on map to search that location (but not on bays/zone layers)
+    map.current.on('click', (e) => {
+      // Check if click was on the bays layer
+      const bayFeatures = map.current?.queryRenderedFeatures(e.point, { 
+        layers: ['search-results-circles', 'bay-polygons-fill'] 
+      })
+      if (bayFeatures && bayFeatures.length > 0) return
+      
+      // Check if click was on a control element
+      const target = e.originalEvent.target as HTMLElement
+      if (target.closest('.maplibregl-ctrl')) return
+      
+      searchNearby(e.lngLat.lat, e.lngLat.lng)
+    })
+
+    return () => {
+      map.current?.remove()
+      map.current = null
+    }
+  }, [])
+
+  // Load zones for tariff info and display on map
+  useEffect(() => {
+    const loadZones = async () => {
+      try {
+        // Fetch all zones (need higher limit for Vienna's ~3000 zones)
+        const res = await zonesApi.getAll()
+        console.log('Loaded zones:', res.data.length)
+        setZones(res.data)
+        
+        // Update map source with zone geometries
+        const updateMapSource = () => {
+          if (!map.current) return
+          
+          const source = map.current.getSource('parking-zones') as maplibregl.GeoJSONSource
+          if (!source) {
+            console.warn('parking-zones source not found')
+            return
+          }
+          
+          const features = res.data
+            .filter((z: Zone) => z.geom && z.geom.type === 'Polygon')
+            .map((z: Zone) => ({
+              type: 'Feature' as const,
+              geometry: z.geom,
+              properties: {
+                zone_id: z.zone_id,
+                name: z.name,
+                zone_type: z.zone_type,
+                is_active: z.is_active
+              }
+            }))
+          
+          console.log('Adding', features.length, 'zone features to map')
+          source.setData({ type: 'FeatureCollection', features })
+        }
+        
+        // Wait for map to be fully loaded
+        if (map.current?.isStyleLoaded()) {
+          updateMapSource()
+        } else if (map.current) {
+          map.current.once('load', updateMapSource)
+        }
+      } catch (err) {
+        console.error('Error loading zones:', err)
+      }
+    }
+    loadZones()
+  }, [])
+
+  // Get user location
+  useEffect(() => {
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const loc: [number, number] = [pos.coords.longitude, pos.coords.latitude]
+          setUserLocation(loc)
+          if (map.current) {
+            map.current.flyTo({ center: loc, zoom: 16 })
+          }
+        },
+        (err) => console.error('Geolocation error:', err),
+        { enableHighAccuracy: true }
+      )
+    }
+  }, [])
+
+  // Clear search marker
+  const clearSearchMarker = useCallback(() => {
+    if (searchMarkerRef.current) {
+      searchMarkerRef.current.remove()
+      searchMarkerRef.current = null
+    }
+  }, [])
+
+  // Search for nearby bays
+  const searchNearby = useCallback(async (lat: number, lng: number) => {
+    setLoading(true)
+    clearSearchMarker()
+    setSelectedBay(null)
+    
+    try {
+      const params: Record<string, any> = { 
+        lat, 
+        lng, 
+        radius: searchRadius 
+      }
+      
+      if (showOnlyAvailable) params.status = 'available'
+      if (showEVOnly) params.is_electric = true
+      if (showAccessibleOnly) params.is_disabled_only = true
+
+      const response = await baysApi.getNear(params)
+      setSearchResults(response.data)
+
+      if (map.current) {
+        // Add search center marker (single DOM marker is fine)
+        const centerEl = document.createElement('div')
+        centerEl.innerHTML = `
+          <div class="relative">
+            <div class="absolute -inset-4 bg-blue-500/20 rounded-full animate-ping"></div>
+            <div class="w-5 h-5 bg-blue-500 rounded-full border-3 border-white shadow-lg"></div>
+          </div>
+        `
+        searchMarkerRef.current = new maplibregl.Marker(centerEl)
+          .setLngLat([lng, lat])
+          .addTo(map.current)
+
+        // Update GeoJSON source with search results (uses GPU-accelerated rendering)
+        const source = map.current.getSource('search-results') as maplibregl.GeoJSONSource
+        if (source) {
+          // Convert items to GeoJSON features using centroids
+          const features = response.data.items.map((bay: NearbyBay) => ({
+            type: 'Feature' as const,
+            geometry: bay.geom, // This is now a Point centroid from the API
+            properties: {
+              bay_id: bay.bay_id,
+              bay_number: bay.bay_number,
+              zone_id: bay.zone_id,
+              zone_name: bay.zone_name,
+              status: bay.status,
+              is_disabled_only: bay.is_disabled_only,
+              is_electric: bay.is_electric,
+              distance_meters: bay.distance_meters
+            }
+          }))
+          
+          source.setData({
+            type: 'FeatureCollection',
+            features
+          })
+        }
+        
+        // Update bay polygon source with full polygon geometries from features
+        const polySource = map.current.getSource('bay-polygons') as maplibregl.GeoJSONSource
+        if (polySource && response.data.features) {
+          polySource.setData({
+            type: 'FeatureCollection',
+            features: response.data.features
+          })
+        }
+
+        // Fit bounds to show all results
+        if (response.data.items.length > 0) {
+          const bounds = new maplibregl.LngLatBounds()
+          bounds.extend([lng, lat])
+          response.data.items.forEach((bay: NearbyBay) => {
+            const center = getGeometryCenter(bay.geom)
+            if (center) {
+              bounds.extend(center)
+            }
+          })
+          map.current.fitBounds(bounds, { padding: 80, maxZoom: 17 })
+        }
+      }
+    } catch (err) {
+      console.error('Search failed:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [searchRadius, showOnlyAvailable, showEVOnly, showAccessibleOnly, clearSearchMarker])
+
+  // Search at user location
+  const searchAtLocation = () => {
+    if (userLocation) {
+      searchNearby(userLocation[1], userLocation[0])
+    } else {
+      alert('Location not available. Please enable location services or click on the map.')
+    }
+  }
+
+  // Get zone tariff
+  const getZoneTariff = (zoneName: string) => {
+    const zone = zones.find(z => z.name === zoneName)
+    return zone?.tariff || null
+  }
+
+  // Start parking session
+  const handleStartSession = (bay: NearbyBay) => {
+    if (!isAuthenticated) {
+      navigate('/login?redirect=/find-parking')
+      return
+    }
+    navigate(`/driver/start-session/${bay.bay_id}`)
+  }
+
+  return (
+    <div className="h-screen flex flex-col">
+      {/* Header */}
+      <header className="bg-white border-b px-4 py-3 flex items-center justify-between z-10">
+        <div className="flex items-center gap-3">
+          <Car className="h-8 w-8 text-primary-600" />
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Find Parking</h1>
+            <p className="text-xs text-gray-500">Smart City Parking System</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {isAuthenticated ? (
+            <Link
+              to="/"
+              className="flex items-center gap-2 px-3 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"
+            >
+              <span className="hidden sm:inline">{user?.full_name}</span>
+              <ChevronRight className="h-4 w-4" />
+            </Link>
+          ) : (
+            <Link
+              to="/login"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"
+            >
+              <LogIn className="h-4 w-4" />
+              <span>Sign In</span>
+            </Link>
+          )}
+        </div>
+      </header>
+
+      <div className="flex-1 flex">
+        {/* Sidebar - Search Controls & Results */}
+        <div className="w-80 bg-white border-r flex flex-col">
+          {/* Search Controls */}
+          <div className="p-4 border-b space-y-4">
+            <button
+              onClick={searchAtLocation}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-lg px-4 py-3 font-medium hover:bg-primary-700 disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Searching...
+                </>
+              ) : (
+                <>
+                  <Navigation2 className="h-5 w-5" />
+                  Find Parking Near Me
+                </>
+              )}
+            </button>
+
+            <div className="text-xs text-gray-500 text-center">
+              Or click anywhere on the map to search that location
+            </div>
+
+            {/* Filters */}
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm font-medium text-gray-700">Search Radius</label>
+                <select
+                  value={searchRadius}
+                  onChange={(e) => setSearchRadius(Number(e.target.value))}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
+                >
+                  <option value={200}>200m</option>
+                  <option value={500}>500m</option>
+                  <option value={1000}>1km</option>
+                  <option value={2000}>2km</option>
+                </select>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <label className="inline-flex items-center gap-1.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={showOnlyAvailable}
+                    onChange={(e) => setShowOnlyAvailable(e.target.checked)}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  Available only
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={showEVOnly}
+                    onChange={(e) => setShowEVOnly(e.target.checked)}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <Zap className="h-3.5 w-3.5 text-yellow-500" />
+                  EV
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={showAccessibleOnly}
+                    onChange={(e) => setShowAccessibleOnly(e.target.checked)}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <Accessibility className="h-3.5 w-3.5 text-blue-500" />
+                  Accessible
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Results */}
+          <div className="flex-1 overflow-y-auto">
+            {searchResults ? (
+              <>
+                <div className="px-4 py-2 bg-gray-50 border-b">
+                  <span className="text-sm font-medium text-gray-700">
+                    {searchResults.total} parking spot{searchResults.total !== 1 ? 's' : ''} found
+                    {searchResults.total > 50 && <span className="text-gray-500"> (showing nearest 50)</span>}
+                  </span>
+                </div>
+                <div className="divide-y">
+                  {searchResults.items.slice(0, 50).map((bay) => {
+                    const tariff = getZoneTariff(bay.zone_name)
+                    return (
+                      <div
+                        key={bay.bay_id}
+                        className={clsx(
+                          'p-4 cursor-pointer hover:bg-gray-50 transition-colors',
+                          selectedBay?.bay_id === bay.bay_id && 'bg-primary-50 border-l-4 border-primary-500'
+                        )}
+                        onClick={() => {
+                          setSelectedBay(bay)
+                          const center = getGeometryCenter(bay.geom)
+                          if (center) {
+                            map.current?.flyTo({ center, zoom: 18 })
+                          }
+                        }}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center gap-3">
+                            <div 
+                              className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold"
+                              style={{ backgroundColor: STATUS_COLORS[bay.status] }}
+                            >
+                              {bay.bay_number}
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900">{bay.zone_name}</p>
+                              <p className="text-sm text-gray-500">Bay {bay.bay_number}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-medium text-gray-900">
+                              {Math.round(bay.distance_meters)}m
+                            </p>
+                            {tariff && (
+                              <p className="text-xs text-gray-500">
+                                €{tariff.hourly_rate}/hr
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className={clsx(
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+                            bay.status === 'available' && 'bg-green-100 text-green-800',
+                            bay.status === 'occupied' && 'bg-red-100 text-red-800',
+                            bay.status === 'reserved' && 'bg-amber-100 text-amber-800',
+                            bay.status === 'closed' && 'bg-gray-100 text-gray-800'
+                          )}>
+                            {bay.status}
+                          </span>
+                          {bay.is_electric && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                              <Zap className="h-3 w-3" /> EV
+                            </span>
+                          )}
+                          {bay.is_disabled_only && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                              <Accessibility className="h-3 w-3" /> Accessible
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                {searchResults.items.length === 0 && (
+                  <div className="p-8 text-center">
+                    <MapPin className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                    <p className="text-gray-500">No parking spots found</p>
+                    <p className="text-sm text-gray-400 mt-1">Try expanding your search radius</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="p-8 text-center">
+                <Search className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                <p className="text-gray-500">Search for parking</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  Click "Find Parking Near Me" or tap the map
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Map */}
+        <div className="flex-1 relative">
+          <div ref={mapContainer} className="absolute inset-0" />
+
+          {/* Legend */}
+          <div className="absolute bottom-4 left-4 bg-white rounded-lg shadow-lg p-3 z-10">
+            <p className="text-xs font-medium text-gray-700 mb-2">Legend</p>
+            <div className="space-y-1">
+              {Object.entries(STATUS_COLORS).map(([status, color]) => (
+                <div key={status} className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
+                  <span className="text-xs text-gray-600 capitalize">{status}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Selected Bay Modal */}
+      {selectedBay && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center sm:items-center">
+          <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl shadow-2xl animate-slide-up">
+            <div className="p-6">
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-4">
+                  <div 
+                    className="w-14 h-14 rounded-full flex items-center justify-center text-white text-xl font-bold"
+                    style={{ backgroundColor: STATUS_COLORS[selectedBay.status] }}
+                  >
+                    {selectedBay.bay_number}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-semibold text-gray-900">Bay {selectedBay.bay_number}</h3>
+                    <p className="text-gray-500">{selectedBay.zone_name}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedBay(null)}
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                >
+                  <X className="h-5 w-5 text-gray-400" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="flex items-center gap-2 text-gray-600">
+                  <MapPin className="h-4 w-4" />
+                  <span>{Math.round(selectedBay.distance_meters)}m away</span>
+                </div>
+                <div className="flex items-center gap-2 text-gray-600">
+                  <Clock className="h-4 w-4" />
+                  <span className="capitalize">{selectedBay.status}</span>
+                </div>
+                {getZoneTariff(selectedBay.zone_name) && (
+                  <div className="flex items-center gap-2 text-gray-600">
+                    <CreditCard className="h-4 w-4" />
+                    <span>€{getZoneTariff(selectedBay.zone_name)?.hourly_rate}/hr</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  {selectedBay.is_electric && (
+                    <span className="inline-flex items-center gap-1 text-yellow-600">
+                      <Zap className="h-4 w-4" /> EV Charging
+                    </span>
+                  )}
+                  {selectedBay.is_disabled_only && (
+                    <span className="inline-flex items-center gap-1 text-blue-600">
+                      <Accessibility className="h-4 w-4" /> Accessible
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {selectedBay.status === 'available' ? (
+                <div className="space-y-3">
+                  <button
+                    onClick={() => handleStartSession(selectedBay)}
+                    className="w-full py-3 bg-primary-600 text-white rounded-xl font-semibold hover:bg-primary-700 transition-colors"
+                  >
+                    {isAuthenticated ? 'Start Parking Session' : 'Sign In to Start Session'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      const center = getGeometryCenter(selectedBay.geom)
+                      if (center) {
+                        window.open(
+                          `https://www.google.com/maps/dir/?api=1&destination=${center[1]},${center[0]}`,
+                          '_blank'
+                        )
+                      }
+                    }}
+                    className="w-full py-3 border border-gray-300 rounded-xl font-semibold hover:bg-gray-50 transition-colors"
+                  >
+                    Get Directions
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-gray-50 rounded-xl p-4 flex items-start gap-3">
+                  <Info className="h-5 w-5 text-gray-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-gray-700">This bay is currently {selectedBay.status}</p>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Please select an available bay to start a parking session.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

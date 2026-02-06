@@ -1,0 +1,74 @@
+# Presentation materials (excluded)
+PRESENTATION_SCRIPT.md
+README_DETAILED.md
+
+# Dependencies
+node_modules/
+.pnpm-store/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Build outputs
+dist/
+build/
+.next/
+*.egg-info/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Testing
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Turbo
+.turbo/
+
+# Database
+*.sql.backup
+pgdata/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+test_*.sql
+update_*.sql
+check_*.sql
+hash.txt
+clear_session.py
+update_passwords.sql
