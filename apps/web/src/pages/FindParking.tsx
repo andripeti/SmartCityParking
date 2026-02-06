@@ -74,6 +74,43 @@ function getPolygonCenter(geom: any): [number, number] | null {
   return null
 }
 
+function getGeometryPoint(geom: any): [number, number] | null {
+  if (!geom) return null
+  if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
+    const [lng, lat] = geom.coordinates
+    if (typeof lng === 'number' && typeof lat === 'number') return [lng, lat]
+  }
+  if (geom.type === 'Polygon') return getPolygonCenter(geom)
+  if (geom.type === 'MultiPolygon' && Array.isArray(geom.coordinates?.[0])) {
+    return getPolygonCenter({ type: 'Polygon', coordinates: geom.coordinates[0] })
+  }
+  return null
+}
+
+function buildBayFeatures(bays: ParkingBay[]) {
+  return bays
+    .map((bay: ParkingBay) => {
+      const point = getGeometryPoint(bay.geom)
+      if (!point) return null
+      return {
+        type: 'Feature' as const,
+        geometry: {
+          type: 'Point' as const,
+          coordinates: point
+        },
+        properties: {
+          bay_id: bay.bay_id,
+          bay_number: bay.bay_number,
+          zone_id: bay.zone_id,
+          status: bay.status,
+          is_electric: bay.is_electric,
+          is_disabled_only: bay.is_disabled_only
+        }
+      }
+    })
+    .filter((feature): feature is { type: 'Feature'; geometry: { type: 'Point'; coordinates: [number, number] }; properties: any } => Boolean(feature))
+}
+
 // Calculate approximate area of a polygon in square meters
 function getPolygonAreaSqM(geom: any): number {
   if (!geom || geom.type !== 'Polygon' || !geom.coordinates?.[0]) return 0
@@ -161,6 +198,8 @@ export default function FindParking() {
   const [bookingLoading, setBookingLoading] = useState(false)
   const [bookingError, setBookingError] = useState<string | null>(null)
   const [bookingSuccess, setBookingSuccess] = useState(false)
+  const [dataLoaded, setDataLoaded] = useState(false)
+  const pendingSearchRef = useRef<{ lat: number; lng: number } | null>(null)
 
   // Initialize map
   useEffect(() => {
@@ -374,12 +413,22 @@ export default function FindParking() {
         ])
         setAllZones(zonesRes.data)
         setAllBays(baysRes.data)
+        setDataLoaded(true)
       } catch (err) {
         console.error('Error loading data:', err)
       }
     }
     loadData()
   }, [])
+
+  // Auto-retry pending search once data is loaded
+  useEffect(() => {
+    if (!dataLoaded || !pendingSearchRef.current) return
+    const { lat, lng } = pendingSearchRef.current
+    pendingSearchRef.current = null
+    searchAtPoint(lat, lng)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataLoaded])
 
   // Create circle GeoJSON for search radius visualization
   const createCircleGeoJSON = useCallback((lat: number, lng: number, radiusMeters: number) => {
@@ -418,6 +467,12 @@ export default function FindParking() {
 
   // Search for zones at a specific point
   const searchAtPoint = useCallback(async (lat: number, lng: number) => {
+    // If data not loaded yet, store search and wait for data
+    if (!dataLoaded) {
+      pendingSearchRef.current = { lat, lng }
+      return
+    }
+
     setLoading(true)
     clearMarkers()
     setSelectedZone(null)
@@ -530,18 +585,7 @@ export default function FindParking() {
           const zoneIds = filteredZones.map(z => z.zone_id)
           const baysInZones = allBays.filter((bay: ParkingBay) => zoneIds.includes(bay.zone_id))
           
-          const bayFeatures = baysInZones.map((bay: ParkingBay) => ({
-            type: 'Feature' as const,
-            geometry: bay.geom,
-            properties: {
-              bay_id: bay.bay_id,
-              bay_number: bay.bay_number,
-              zone_id: bay.zone_id,
-              status: bay.status,
-              is_electric: bay.is_electric,
-              is_disabled_only: bay.is_disabled_only
-            }
-          }))
+          const bayFeatures = buildBayFeatures(baysInZones)
           baySource.setData({ type: 'FeatureCollection', features: bayFeatures })
         }
         
@@ -556,7 +600,7 @@ export default function FindParking() {
     } finally {
       setLoading(false)
     }
-  }, [allZones, allBays, searchRadius, showOnlyAvailable, clearMarkers, createCircleGeoJSON])
+  }, [dataLoaded, allZones, allBays, searchRadius, showOnlyAvailable, clearMarkers, createCircleGeoJSON])
 
   // Handle starting session - navigate to zone details and show bays
   const handleSelectZone = useCallback((zone: ZoneWithBays) => {
@@ -579,6 +623,16 @@ export default function FindParking() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchRadius, showOnlyAvailable])
+
+  useEffect(() => {
+    if (!map.current || nearbyZones.length === 0) return
+    const baySource = map.current.getSource('parking-bays') as maplibregl.GeoJSONSource
+    if (!baySource) return
+    const zoneIds = nearbyZones.map((z) => z.zone_id)
+    const baysInZones = allBays.filter((bay: ParkingBay) => zoneIds.includes(bay.zone_id))
+    const bayFeatures = buildBayFeatures(baysInZones)
+    baySource.setData({ type: 'FeatureCollection', features: bayFeatures })
+  }, [allBays, nearbyZones])
 
   // Set up map click handler (separate from initialization to avoid stale closures)
   useEffect(() => {

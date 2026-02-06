@@ -49,6 +49,45 @@ const STATUS_COLORS = {
   closed: '#6b7280',
 }
 
+function getGeometryPoint(geom: any): [number, number] | null {
+  if (!geom) return null
+  if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
+    const [lng, lat] = geom.coordinates
+    if (typeof lng === 'number' && typeof lat === 'number') return [lng, lat]
+  }
+  if (geom.type === 'Polygon' && Array.isArray(geom.coordinates?.[0])) {
+    const ring = geom.coordinates[0]
+    let sumLng = 0
+    let sumLat = 0
+    for (const coord of ring) {
+      if (Array.isArray(coord) && coord.length >= 2) {
+        sumLng += coord[0]
+        sumLat += coord[1]
+      }
+    }
+    if (ring.length > 0) return [sumLng / ring.length, sumLat / ring.length]
+  }
+  if (geom.type === 'MultiPolygon' && Array.isArray(geom.coordinates?.[0])) {
+    return getGeometryPoint({ type: 'Polygon', coordinates: geom.coordinates[0] })
+  }
+  return null
+}
+
+function normalizeBayGeoJSON(data: any) {
+  if (!data || data.type !== 'FeatureCollection' || !Array.isArray(data.features)) return data
+  const features = data.features
+    .map((feature: any) => {
+      const point = getGeometryPoint(feature?.geometry)
+      if (!point) return null
+      return {
+        ...feature,
+        geometry: { type: 'Point', coordinates: point }
+      }
+    })
+    .filter(Boolean)
+  return { ...data, features }
+}
+
 interface BayFeature {
   bay_id: number
   bay_number: string
@@ -186,12 +225,13 @@ export default function MapView() {
       // Load bays
       if (showBays) {
         const baysData = await baysApi.getGeoJSON()
+        const normalizedBays = normalizeBayGeoJSON(baysData.data)
         if (map.current.getSource('bays')) {
-          (map.current.getSource('bays') as maplibregl.GeoJSONSource).setData(baysData.data)
+          (map.current.getSource('bays') as maplibregl.GeoJSONSource).setData(normalizedBays)
         } else {
           map.current.addSource('bays', {
             type: 'geojson',
-            data: baysData.data,
+            data: normalizedBays,
           })
           map.current.addLayer({
             id: 'bays-circle',
