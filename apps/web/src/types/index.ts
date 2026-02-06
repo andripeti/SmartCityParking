@@ -144,9 +144,8 @@ export interface Vehicle {
   vehicle_id: number;
   user_id: number;
   license_plate: string;
-  type: string;
-  is_ev: boolean;
-  is_default: boolean;
+  vehicle_type: string;
+  color?: string;
   created_at: string;
 }
 

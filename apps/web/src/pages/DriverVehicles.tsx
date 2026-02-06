@@ -1,11 +1,9 @@
-import clsx from 'clsx'
 import {
     Car,
     Check,
     Edit2,
     Loader2,
     Plus,
-    Star,
     Trash2,
     X
 } from 'lucide-react'
@@ -16,9 +14,8 @@ import type { Vehicle } from '../types'
 
 interface VehicleForm {
   license_plate: string
-  type: string
-  is_ev: boolean
-  is_default: boolean
+  vehicle_type: string
+  color?: string
 }
 
 const VEHICLE_TYPES = ['car', 'motorcycle', 'van', 'truck', 'bus']
@@ -32,9 +29,8 @@ export default function DriverVehicles() {
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState<VehicleForm>({
     license_plate: '',
-    type: 'car',
-    is_ev: false,
-    is_default: false
+    vehicle_type: 'car',
+    color: undefined
   })
 
   useEffect(() => {
@@ -55,9 +51,8 @@ export default function DriverVehicles() {
   const resetForm = () => {
     setForm({
       license_plate: '',
-      type: 'car',
-      is_ev: false,
-      is_default: false
+      vehicle_type: 'car',
+      color: undefined
     })
     setShowForm(false)
     setEditingId(null)
@@ -89,9 +84,8 @@ export default function DriverVehicles() {
   const handleEdit = (vehicle: Vehicle) => {
     setForm({
       license_plate: vehicle.license_plate,
-      type: vehicle.type,
-      is_ev: vehicle.is_ev,
-      is_default: vehicle.is_default
+      vehicle_type: vehicle.vehicle_type,
+      color: vehicle.color
     })
     setEditingId(vehicle.vehicle_id)
     setShowForm(true)
@@ -106,21 +100,6 @@ export default function DriverVehicles() {
     } catch (err) {
       console.error('Failed to delete vehicle:', err)
       alert('Failed to delete vehicle')
-    }
-  }
-
-  const handleSetDefault = async (vehicleId: number) => {
-    try {
-      // First unset current default
-      const currentDefault = vehicles.find(v => v.is_default)
-      if (currentDefault) {
-        await vehiclesApi.update(currentDefault.vehicle_id, { is_default: false })
-      }
-      // Set new default
-      await vehiclesApi.update(vehicleId, { is_default: true })
-      await loadVehicles()
-    } catch (err) {
-      console.error('Failed to set default:', err)
     }
   }
 
@@ -182,8 +161,8 @@ export default function DriverVehicles() {
                 Vehicle Type
               </label>
               <select
-                value={form.type}
-                onChange={(e) => setForm({ ...form, type: e.target.value })}
+                value={form.vehicle_type}
+                onChange={(e) => setForm({ ...form, vehicle_type: e.target.value })}
                 className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               >
                 {VEHICLE_TYPES.map((type) => (
@@ -194,26 +173,17 @@ export default function DriverVehicles() {
               </select>
             </div>
 
-            <div className="flex items-center gap-6">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={form.is_ev}
-                  onChange={(e) => setForm({ ...form, is_ev: e.target.checked })}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                <span className="text-sm text-gray-700">Electric Vehicle (EV)</span>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Color (Optional)
               </label>
-
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={form.is_default}
-                  onChange={(e) => setForm({ ...form, is_default: e.target.checked })}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                <span className="text-sm text-gray-700">Set as default</span>
-              </label>
+              <input
+                type="text"
+                value={form.color || ''}
+                onChange={(e) => setForm({ ...form, color: e.target.value })}
+                placeholder="e.g., Red, Blue, Black"
+                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              />
             </div>
 
             <div className="flex gap-3 pt-2">
@@ -252,48 +222,23 @@ export default function DriverVehicles() {
           {vehicles.map((vehicle) => (
             <div
               key={vehicle.vehicle_id}
-              className={clsx(
-                'bg-white rounded-xl border p-4 flex items-center gap-4',
-                vehicle.is_default && 'border-primary-300 bg-primary-50/30'
-              )}
+              className="bg-white rounded-xl border p-4 flex items-center gap-4"
             >
-              <div className={clsx(
-                'p-3 rounded-xl',
-                vehicle.is_default ? 'bg-primary-100' : 'bg-gray-100'
-              )}>
-                <Car className={clsx(
-                  'h-6 w-6',
-                  vehicle.is_default ? 'text-primary-600' : 'text-gray-500'
-                )} />
+              <div className="p-3 rounded-xl bg-gray-100">
+                <Car className="h-6 w-6 text-gray-500" />
               </div>
 
               <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <p className="font-semibold text-gray-900">{vehicle.license_plate}</p>
-                  {vehicle.is_default && (
-                    <span className="inline-flex items-center gap-1 text-xs bg-primary-100 text-primary-700 px-2 py-0.5 rounded-full">
-                      <Star className="h-3 w-3" /> Default
-                    </span>
-                  )}
-                  {vehicle.is_ev && (
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                      EV
-                    </span>
-                  )}
                 </div>
-                <p className="text-sm text-gray-500 capitalize">{vehicle.type}</p>
+                <p className="text-sm text-gray-500 capitalize">{vehicle.vehicle_type}</p>
+                {vehicle.color && (
+                  <p className="text-xs text-gray-400">{vehicle.color}</p>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
-                {!vehicle.is_default && (
-                  <button
-                    onClick={() => handleSetDefault(vehicle.vehicle_id)}
-                    className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg"
-                    title="Set as default"
-                  >
-                    <Star className="h-4 w-4" />
-                  </button>
-                )}
                 <button
                   onClick={() => handleEdit(vehicle)}
                   className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"

@@ -420,7 +420,7 @@ class VehicleBase(BaseModel):
         return v
 
 class VehicleCreate(VehicleBase):
-    pass
+    user_id: int
 
 class VehicleResponse(VehicleBase):
     vehicle_id: int

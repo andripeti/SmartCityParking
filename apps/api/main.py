@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from config import settings
 from database import engine, Base, SessionLocal
-from routers import auth, zones, bays, streets, sensors, terminals, sessions, violations, analysis, users
+from routers import auth, zones, bays, streets, sensors, terminals, sessions, violations, analysis, users, vehicles
 from services.simulation import start_simulation, stop_simulation, SIMULATION_ENABLED
 
 @asynccontextmanager
@@ -70,6 +70,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
+app.include_router(vehicles.router, prefix="/vehicles", tags=["Vehicles"])
 app.include_router(zones.router, prefix="/zones", tags=["Parking Zones"])
 app.include_router(bays.router, prefix="/bays", tags=["Parking Bays"])
 app.include_router(streets.router, prefix="/streets", tags=["Street Segments"])

@@ -175,17 +175,15 @@ export const vehiclesApi = {
   create: (data: {
     user_id: number;
     license_plate: string;
-    type: string;
-    is_ev?: boolean;
-    is_default?: boolean;
-  }) => api.post("/vehicles", data),
+    vehicle_type: string;
+    color?: string;
+  }) => api.post("/vehicles/", data),
   update: (
     id: number,
     data: Partial<{
       license_plate: string;
-      type: string;
-      is_ev: boolean;
-      is_default: boolean;
+      vehicle_type: string;
+      color: string;
     }>,
   ) => api.put(`/vehicles/${id}`, data),
   delete: (id: number) => api.delete(`/vehicles/${id}`),
