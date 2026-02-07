@@ -22,9 +22,55 @@ export default function BayForm({ bay, onClose, onSuccess }: BayFormProps) {
   })
   const [error, setError] = useState<string | null>(null)
 
+  const getZoneById = (zoneId: number) => zones.find((z) => z.zone_id === zoneId)
+
+  const getPolygonCenter = (geom: any): [number, number] | null => {
+    if (!geom || geom.type !== 'Polygon' || !geom.coordinates?.[0]) return null
+    const ring = geom.coordinates[0]
+    if (!Array.isArray(ring) || ring.length === 0) return null
+    let sumLng = 0
+    let sumLat = 0
+    for (const coord of ring) {
+      if (Array.isArray(coord) && coord.length >= 2) {
+        sumLng += coord[0]
+        sumLat += coord[1]
+      }
+    }
+    return [sumLng / ring.length, sumLat / ring.length]
+  }
+
+  const createSquarePolygon = (center: [number, number], sizeMeters = 6) => {
+    const [lng, lat] = center
+    const half = sizeMeters / 2
+    const dLat = half / 111000
+    const dLng = half / (111000 * Math.cos((lat * Math.PI) / 180))
+    const ring = [
+      [lng - dLng, lat - dLat],
+      [lng + dLng, lat - dLat],
+      [lng + dLng, lat + dLat],
+      [lng - dLng, lat + dLat],
+      [lng - dLng, lat - dLat]
+    ]
+    return { type: 'Polygon', coordinates: [ring] }
+  }
+
   useEffect(() => {
     loadZones()
   }, [])
+
+  useEffect(() => {
+    if (bay) return
+    const zoneId = Number(formData.zone_id)
+    if (!zoneId) return
+    const zone = getZoneById(zoneId)
+    if (!zone?.geom) return
+    const center = getPolygonCenter(zone.geom)
+    if (!center) return
+    setFormData((prev) => ({
+      ...prev,
+      geom: createSquarePolygon(center)
+    }))
+  }, [bay, formData.zone_id, zones])
 
   const loadZones = async () => {
     try {
@@ -46,12 +92,20 @@ export default function BayForm({ bay, onClose, onSuccess }: BayFormProps) {
         await baysApi.update(bay.bay_id, formData)
       } else {
         // Create new bay
-        if (!formData.geom) {
-          setError('Geometry is required. Please select a zone and the system will auto-generate the geometry.')
-          setLoading(false)
-          return
+        let geom = formData.geom
+        if (!geom) {
+          const zoneId = Number(formData.zone_id)
+          const zone = zoneId ? getZoneById(zoneId) : undefined
+          const center = zone?.geom ? getPolygonCenter(zone.geom) : null
+          if (center) {
+            geom = createSquarePolygon(center)
+          } else {
+            setError('Geometry is required. Please select a zone and the system will auto-generate the geometry.')
+            setLoading(false)
+            return
+          }
         }
-        await baysApi.create(formData)
+        await baysApi.create({ ...formData, geom })
       }
       onSuccess()
     } catch (err: any) {

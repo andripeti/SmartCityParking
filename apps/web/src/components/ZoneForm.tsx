@@ -68,7 +68,7 @@ export default function ZoneForm({ zone, onClose, onSuccess }: ZoneFormProps) {
         // Parse coordinates as GeoJSON polygon
         try {
           const geojson = JSON.parse(formData.coordinates)
-          data.geometry = geojson
+          data.geom = geojson
         } catch {
           setError('Invalid GeoJSON format')
           setLoading(false)
@@ -83,7 +83,17 @@ export default function ZoneForm({ zone, onClose, onSuccess }: ZoneFormProps) {
       }
       onSuccess()
     } catch (err: any) {
-      setError(err.response?.data?.detail || `Failed to ${zone ? 'update' : 'create'} zone`)
+      let errorMsg = `Failed to ${zone ? 'update' : 'create'} zone`
+      if (err.response?.data) {
+        const data = err.response.data
+        if (data.detail) {
+          errorMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+        } else if (Array.isArray(data)) {
+          // Pydantic validation error array
+          errorMsg = data.map((e: any) => `${e.loc?.join('.')}: ${e.msg}`).join('; ')
+        }
+      }
+      setError(errorMsg)
     } finally {
       setLoading(false)
     }

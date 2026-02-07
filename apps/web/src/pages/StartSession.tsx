@@ -96,7 +96,16 @@ export default function StartSession() {
       })
     } catch (err: any) {
       console.error('Failed to start session:', err)
-      setError(err.response?.data?.detail || 'Failed to start parking session')
+      let errorMsg = 'Failed to start parking session'
+      if (err.response?.data) {
+        const data = err.response.data
+        if (data.detail) {
+          errorMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+        } else if (Array.isArray(data)) {
+          errorMsg = data.map((e: any) => `${e.loc?.join('.')}: ${e.msg}`).join('; ')
+        }
+      }
+      setError(errorMsg)
     } finally {
       setStarting(false)
     }

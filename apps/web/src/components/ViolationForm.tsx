@@ -92,7 +92,16 @@ export default function ViolationForm({ onClose, onSuccess }: ViolationFormProps
       })
       onSuccess()
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to create violation')
+      let errorMsg = 'Failed to create violation'
+      if (err.response?.data) {
+        const data = err.response.data
+        if (data.detail) {
+          errorMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+        } else if (Array.isArray(data)) {
+          errorMsg = data.map((e: any) => `${e.loc?.join('.')}: ${e.msg}`).join('; ')
+        }
+      }
+      setError(errorMsg)
     } finally {
       setLoading(false)
     }
